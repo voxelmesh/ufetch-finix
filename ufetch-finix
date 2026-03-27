@@ -1,0 +1,99 @@
+#!/bin/sh
+#
+# ufetch-finix - tiny system info for finix
+
+## INFO
+
+# user is already defined
+host="$(hostname)"
+os="finix"
+if [ -f /etc/os-release ]; then
+	# from pfetch
+	while IFS='=' read -r key val; do
+		case $key in
+			(PRETTY_NAME)
+				os=$val
+			;;
+		esac
+	done < /etc/os-release
+
+	os=${os##[\"\']}
+    os=${os%%[\"\']}
+fi
+kernel="$(uname -sr)"
+uptime="$(uptime | awk -F, '{sub(".*up ",x,$1);print $1}' | sed -e 's/^[ \t]*//')"
+shell="$(basename "${SHELL}")"
+
+packages=$(nix-store -q --requisites /run/current-system/sw | sort -u | wc -l)
+
+for profile in /nix/var/nix/profiles/per-user/*/profile; do
+    if [ -e "$profile" ] && nix-store --verify-path "$profile" >/dev/null 2>&1; then
+        count=$(nix-store -q --requisites "$profile" | sort -u | wc -l)
+        packages=$(expr "$packages" + "$count")
+    fi
+done
+
+## UI DETECTION
+
+parse_rcs() {
+	for f in "${@}"; do
+		wm="$(tail -n 1 "${f}" 2> /dev/null | cut -d ' ' -f 2)"
+		[ -n "${wm}" ] && echo "${wm}" && return
+	done
+}
+
+rcwm="$(parse_rcs "${HOME}/.xinitrc" "${HOME}/.xsession")"
+
+ui='unknown'
+uitype='UI'
+if [ -n "${DE}" ]; then
+	ui="${DE}"
+	uitype='DE'
+elif [ -n "${WM}" ]; then
+	ui="${WM}"
+	uitype='WM'
+elif [ -n "${XDG_CURRENT_DESKTOP}" ]; then
+	ui="${XDG_CURRENT_DESKTOP}"
+	uitype='DE'
+elif [ -n "${DESKTOP_SESSION}" ]; then
+	ui="${DESKTOP_SESSION}"
+	uitype='DE'
+elif [ -n "${rcwm}" ]; then
+	ui="${rcwm}"
+	uitype='WM'
+elif [ -n "${XDG_SESSION_TYPE}" ]; then
+	ui="${XDG_SESSION_TYPE}"
+fi
+
+ui="$(basename "${ui}")"
+
+## DEFINE COLORS
+
+# probably don't change these
+if [ -x "$(command -v tput)" ]; then
+	bold="$(tput bold 2> /dev/null)"
+	gray="$(tput setaf 8 2> /dev/null)"
+	red="$(tput setaf 1 2> /dev/null)"
+	reset="$(tput sgr0 2> /dev/null)"
+fi
+
+# you can change these
+lc="${reset}${bold}${red}"         # labels
+nc="${reset}${bold}${gray}"         # user and hostname
+ic="${reset}"                       # info
+c0="${reset}${red}"                # first color
+c1="${reset}${gray}"         # second color
+
+## OUTPUT
+
+sed 's/\\/\\\\/g' <<EOF
+
+${c0}    \\   ${c1}\\ //    ${nc}${USER}${ic}@${nc}${host}${reset}
+${c0}   ==\\___${c1}\\/ ${c0}//  ${lc}OS:        ${ic}${os}${reset}
+${c1}     //    \\${c0}//   ${lc}KERNEL:    ${ic}${kernel}${reset}
+${c1}  ==//      ${c0}//==  ${lc}UPTIME:    ${ic}${uptime}${reset}
+${c1}   //${c0}\\${c1}____${c0}//     ${lc}PACKAGES:  ${ic}${packages}${reset}
+${c1}  // ${c0}/\\   ${c1}\\==   ${lc}SHELL:     ${ic}${shell}${reset}
+${c0}    // \\   ${c1}\\    ${lc}${uitype}:        ${ic}${ui}${reset}
+
+EOF
